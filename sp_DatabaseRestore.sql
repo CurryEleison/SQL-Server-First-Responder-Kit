@@ -211,7 +211,10 @@ DECLARE @cmd NVARCHAR(4000) = N'', --Holds xp_cmdshell command
 		@LogFirstLSN NUMERIC(25, 0), --Holds first LSN in log backup headers
 		@LogLastLSN NUMERIC(25, 0), --Holds last LSN in log backup headers
 		@FileListParamSQL NVARCHAR(4000) = N'', --Holds INSERT list for #FileListParameters
-        @RestoreDatabaseID smallint;    --Holds DB_ID of @RestoreDatabaseName
+		@RestoreDatabaseID smallint,    --Holds DB_ID of @RestoreDatabaseName
+		@HostPlatform nvarchar(max), -- current platform. Should be Windows or Linux
+		@DirectorySeparator CHAR(1), -- Path separator on current OS
+		@OriginalDirectorySeparator CHAR(1);  -- Path separator in backup catalog
 
 DECLARE @FileListSimple TABLE (
     BackupFile NVARCHAR(255) NOT NULL, 
@@ -316,28 +319,51 @@ CREATE TABLE #Headers
 );
 
 /*
-Correct paths in case people forget a final "\" 
+Set up platform dependencies
+*/
+
+IF @MajorVersion >= 14
+	BEGIN
+		SELECT @HostPlatform = host_platform
+		FROM sys.dm_os_host_info
+	END
+	ELSE
+	BEGIN
+		SET @HostPlatform = 'Windows'
+	END;
+
+SELECT @DirectorySeparator = CASE
+	WHEN @HostPlatform = 'Windows' THEN '\'
+	WHEN @HostPlatform = 'Linux' THEN '/'
+	ELSE '\'
+	END;
+
+SELECT @OriginalDirectorySeparator = @DirectorySeparator;
+
+
+/*
+Correct paths in case people forget a final "\" or "/"
 */
 
 /*Full*/
-IF (SELECT RIGHT(@BackupPathFull, 1)) <> '\' --Has to end in a '\'
+IF (SELECT RIGHT(@BackupPathFull, 1)) <> @DirectorySeparator --Has to end in a '\' or '/'
 	BEGIN
-		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @BackupPathFull to add a "\"', 0, 1) WITH NOWAIT;
-		SET @BackupPathFull += N'\';
+		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @BackupPathFull to add a "%s"', 0, 1, @DirectorySeparator) WITH NOWAIT;
+		SET @BackupPathFull += @DirectorySeparator;
 	END;
 
 /*Diff*/
-IF (SELECT RIGHT(@BackupPathDiff, 1)) <> '\' --Has to end in a '\'
+IF (SELECT RIGHT(@BackupPathDiff, 1)) <> @DirectorySeparator --Has to end in a '\' or '/'
 	BEGIN
-		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @BackupPathDiff to add a "\"', 0, 1) WITH NOWAIT;
-		SET @BackupPathDiff += N'\';
+		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @BackupPathDiff to add a "%s"', 0, 1, @DirectorySeparator) WITH NOWAIT;
+		SET @BackupPathDiff += @DirectorySeparator;
 	END;
 
 /*Log*/
-IF (SELECT RIGHT(@BackupPathLog, 1)) <> '\' --Has to end in a '\'
+IF (SELECT RIGHT(@BackupPathLog, 1)) <> @DirectorySeparator --Has to end in a '\' or '/'
 	BEGIN
-		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @BackupPathLog to add a "\"', 0, 1) WITH NOWAIT;
-		SET @BackupPathLog += N'\';
+		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @BackupPathLog to add a "%s"', 0, 1, @DirectorySeparator) WITH NOWAIT;
+		SET @BackupPathLog += @DirectorySeparator;
 	END;
 
 /*Move Data File*/
@@ -346,10 +372,10 @@ IF NULLIF(@MoveDataDrive, '') IS NULL
 		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Getting default data drive for @MoveDataDrive', 0, 1) WITH NOWAIT;
 		SET @MoveDataDrive = CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(260));
 	END;
-IF (SELECT RIGHT(@MoveDataDrive, 1)) <> '\' --Has to end in a '\'
+IF (SELECT RIGHT(@MoveDataDrive, 1)) <> @DirectorySeparator --Has to end in a '\' or '/'
 	BEGIN
-		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @MoveDataDrive to add a "\"', 0, 1) WITH NOWAIT;
-		SET @MoveDataDrive += N'\';
+		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @MoveDataDrive to add a "%s"', 0, 1, @DirectorySeparator) WITH NOWAIT;
+		SET @MoveDataDrive += @DirectorySeparator;
 	END;
 
 /*Move Log File*/
@@ -358,10 +384,10 @@ IF NULLIF(@MoveLogDrive, '') IS NULL
 		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Getting default log drive for @MoveLogDrive', 0, 1) WITH NOWAIT;
 		SET @MoveLogDrive  = CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS nvarchar(260));
 	END;
-IF (SELECT RIGHT(@MoveLogDrive, 1)) <> '\' --Has to end in a '\'
+IF (SELECT RIGHT(@MoveLogDrive, 1)) <> @DirectorySeparator --Has to end in a '\' or '/'
 	BEGIN
-		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @MoveDataDrive to add a "\"', 0, 1) WITH NOWAIT;
-		SET @MoveLogDrive += N'\';
+		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @MoveDataDrive to add a "%s"', 0, 1, @DirectorySeparator) WITH NOWAIT;
+		SET @MoveLogDrive += @DirectorySeparator;
 	END;
 
 /*Move Filestream File*/
@@ -370,17 +396,17 @@ IF NULLIF(@MoveFilestreamDrive, '') IS NULL
 		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Setting default data drive for @MoveFilestreamDrive', 0, 1) WITH NOWAIT;
 		SET @MoveFilestreamDrive  = CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(260));
 	END;
-IF (SELECT RIGHT(@MoveFilestreamDrive, 1)) <> '\' --Has to end in a '\'
+IF (SELECT RIGHT(@MoveFilestreamDrive, 1)) <> @DirectorySeparator --Has to end in a '\' or '/'
 	BEGIN
-		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @MoveFilestreamDrive to add a "\"', 0, 1) WITH NOWAIT;
-		SET @MoveFilestreamDrive += N'\';
+		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @MoveFilestreamDrive to add a "%s"', 0, 1, @DirectorySeparator) WITH NOWAIT;
+		SET @MoveFilestreamDrive += @DirectorySeparator;
 	END;
 
 /*Standby Undo File*/
-IF (SELECT RIGHT(@StandbyUndoPath, 1)) <> '\' --Has to end in a '\'
+IF (SELECT RIGHT(@StandbyUndoPath, 1)) <> @DirectorySeparator --Has to end in a '\' or '/'
 	BEGIN
-		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @StandbyUndoPath to add a "\"', 0, 1) WITH NOWAIT;
-		SET @StandbyUndoPath += N'\';
+		IF @Execute = 'Y' OR @Debug = 1 RAISERROR('Fixing @StandbyUndoPath to add a "%s"', 0, 1, @DirectorySeparator) WITH NOWAIT;
+		SET @StandbyUndoPath += @DirectorySeparator;
 	END;
 
 IF @RestoreDatabaseName IS NULL
@@ -555,6 +581,13 @@ IF @MoveFiles = 1
 BEGIN
 	IF @Execute = 'Y' RAISERROR('@MoveFiles = 1, adjusting paths', 0, 1) WITH NOWAIT;
 	
+	-- Check what the right directory separator is in the backup set
+	SELECT @OriginalDirectorySeparator  = CASE 
+		WHEN PhysicalName LIKE '[A-Z]:%' OR PhysicalName LIKE '\\%' THEN '\'
+		WHEN PhysicalName LIKE '/%' THEN '/' 
+		ELSE @DirectorySeparator END FROM #FileListParameters;
+
+	
 	WITH Files
 	AS (
 		SELECT N', MOVE ''' + LogicalName + N''' TO ''' +
@@ -562,8 +595,8 @@ BEGIN
 				WHEN Type = 'D' THEN @MoveDataDrive
 				WHEN Type = 'L' THEN @MoveLogDrive
 				WHEN Type = 'S' THEN @MoveFilestreamDrive
-			END + CASE WHEN @Database = @RestoreDatabaseName THEN REVERSE(LEFT(REVERSE(PhysicalName), CHARINDEX('\', REVERSE(PhysicalName), 1) -1)) + '''' 
-					ELSE REPLACE(REVERSE(LEFT(REVERSE(PhysicalName), CHARINDEX('\', REVERSE(PhysicalName), 1) -1)), @Database, SUBSTRING(@RestoreDatabaseName, 2, LEN(@RestoreDatabaseName) -2)) + '''' 
+			END + CASE WHEN @Database = @RestoreDatabaseName THEN REVERSE(LEFT(REVERSE(PhysicalName), CHARINDEX(@OriginalDirectorySeparator, REVERSE(PhysicalName), 1) -1)) + '''' 
+					ELSE REPLACE(REVERSE(LEFT(REVERSE(PhysicalName), CHARINDEX(@OriginalDirectorySeparator, REVERSE(PhysicalName), 1) -1)), @Database, SUBSTRING(@RestoreDatabaseName, 2, LEN(@RestoreDatabaseName) -2)) + '''' 
 					END AS logicalcmds
 		FROM #FileListParameters)
 	
